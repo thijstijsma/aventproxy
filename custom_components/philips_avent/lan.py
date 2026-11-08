@@ -12,8 +12,10 @@ import tinytuya
 from homeassistant.core import HomeAssistant
 
 from .lan_policy import (
+    FIXED_HOST_WARN_AFTER,
     PROTOCOL_VERSION_DEFAULT,
     data_stale,
+    fixed_host_failure_warns,
     heartbeat_due,
     is_connection_error,
     parse_protocol_version,
@@ -37,13 +39,17 @@ class TuyaLANClient:
         device_id: str,
         local_key: str,
         on_dps_update: Callable[[dict[str, Any]], None],
+        host: str | None = None,
     ) -> None:
         self._hass = hass
         self._device_id = device_id
         self._local_key = local_key
         self._on_dps_update = on_dps_update
         self._device: tinytuya.Device | None = None
-        self._ip: str | None = None
+        # A configured address is used as is and never replaced by a scan.
+        self._fixed_host = host
+        self._fixed_host_failures = 0
+        self._ip: str | None = host
         self._announced_version: float | None = None
         self._version: float | None = None
         self._task: asyncio.Task | None = None
@@ -124,7 +130,43 @@ class TuyaLANClient:
                 return device
         return None
 
+    async def _connect_fixed_host(self) -> bool:
+        """Connect to the configured address, without ever scanning."""
+        device = await self._connect_at_any_version(self._fixed_host)
+        if device:
+            self._device = device
+            self.connected = True
+            if self._fixed_host_failures >= FIXED_HOST_WARN_AFTER:
+                _LOGGER.info(
+                    "LAN connection to %s at %s restored", self._device_id, self._fixed_host
+                )
+            else:
+                _LOGGER.debug("LAN connected to %s at %s", self._device_id, self._fixed_host)
+            self._fixed_host_failures = 0
+            return True
+
+        self._fixed_host_failures += 1
+        if fixed_host_failure_warns(self._fixed_host_failures):
+            _LOGGER.warning(
+                "Device %s not reachable at its LAN address %s after %d attempts; "
+                "using the cloud until it answers",
+                self._device_id,
+                self._fixed_host,
+                self._fixed_host_failures,
+            )
+        else:
+            _LOGGER.debug(
+                "LAN connection to %s at %s failed (attempt %d)",
+                self._device_id,
+                self._fixed_host,
+                self._fixed_host_failures,
+            )
+        return False
+
     async def _connect(self) -> bool:
+        if self._fixed_host:
+            return await self._connect_fixed_host()
+
         # Try cached IP first (direct TCP, no broadcast needed)
         if self._ip:
             _LOGGER.debug("Trying direct LAN connection to %s at %s", self._device_id, self._ip)

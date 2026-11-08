@@ -41,6 +41,7 @@ class PhilipsAventCoordinator(DataUpdateCoordinator):
         camera_id: str,
         camera_name: str,
         local_key: str | None = None,
+        lan_host: str | None = None,
     ):
         super().__init__(
             hass,
@@ -54,6 +55,7 @@ class PhilipsAventCoordinator(DataUpdateCoordinator):
         self.device_info: dict = {}
         self.rssi: int | None = None
         self._local_key = local_key
+        self._lan_host = lan_host
         self._lan_client: TuyaLANClient | None = None
         self.last_lan_dps: dict[str, Any] = {}
         self.lan_update_sequence = 0
@@ -70,6 +72,7 @@ class PhilipsAventCoordinator(DataUpdateCoordinator):
             self.camera_id,
             self._local_key,
             self._on_lan_dps_update,
+            host=self._lan_host,
         )
         await self._lan_client.start()
 

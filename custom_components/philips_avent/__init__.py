@@ -16,6 +16,7 @@ from .const import (
     CONF_COUNTRY_CODE,
     CONF_DEVICE_ID,
     CONF_ECODE,
+    CONF_LAN_HOSTS,
     CONF_PARTNER,
     CONF_SID,
     CONF_TALKBACK,
@@ -28,6 +29,7 @@ from .const import (
     TUYA_SIGNING_KEY,
 )
 from .coordinator import PhilipsAventCoordinator
+from .lan_policy import fixed_host_for_entry
 from .payload import (
     BRIDGE_CONFIG_PREFIX,
     bridge_config_filename,
@@ -220,13 +222,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await session.close()
         return False
 
+    configured_lan_host = entry.options.get(CONF_LAN_HOSTS)
+    lan_host = fixed_host_for_entry(configured_lan_host, len(cameras))
+    if configured_lan_host and not lan_host:
+        _LOGGER.warning(
+            "Ignoring the LAN address %r: it applies to an account with exactly one monitor "
+            "and must be a bare IP address or host name; finding monitors by broadcast instead",
+            configured_lan_host,
+        )
+
     coordinators = {}
     for cam in cameras:
         cam_id = cam.get("deviceId") or cam.get("devId")
         cam_name = cam.get("deviceName") or cam.get("name", cam_id)
         local_key = cam.get("localKey")
 
-        coordinator = PhilipsAventCoordinator(hass, api, cam_id, cam_name, local_key=local_key)
+        coordinator = PhilipsAventCoordinator(
+            hass, api, cam_id, cam_name, local_key=local_key, lan_host=lan_host
+        )
         await coordinator.async_config_entry_first_refresh()
 
         if not local_key:

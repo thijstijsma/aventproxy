@@ -135,6 +135,9 @@ CONF_BRIDGE_PORT = "bridge_port"
 DEFAULT_BRIDGE_PORT = 38554
 CONF_BRIDGE_HOST = "bridge_host"
 DEFAULT_BRIDGE_HOST = "localhost"
+# Fixed LAN address of the monitor. Unset means find it by Tuya broadcast, which
+# only works when Home Assistant and the monitor share a broadcast domain.
+CONF_LAN_HOSTS = "lan_hosts"
 # Two-way audio. Off by default: asking the camera for it makes the monitor stop
 # a playing lullaby and restart it with a fresh timer when the stream closes
 # (issue #72), so listening must not imply talking.
