@@ -12,11 +12,14 @@ import tinytuya
 from homeassistant.core import HomeAssistant
 
 from .lan_policy import (
+    FIXED_HOST_WARN_AFTER,
     PROTOCOL_VERSION_DEFAULT,
     AddressPublisher,
     baseline_dps,
     confirmed_protocol,
     data_stale,
+    fixed_host_candidates,
+    fixed_host_failure_warns,
     heartbeat_due,
     heartbeat_outcome,
     keyed_protocol,
@@ -48,6 +51,7 @@ class TuyaLANClient:
         last_protocol: str = "",
         *,
         on_session_up: Callable[[], None] | None = None,
+        host: str | None = None,
     ) -> None:
         self._hass = hass
         self._device_id = device_id
@@ -58,6 +62,14 @@ class TuyaLANClient:
         self._address = AddressPublisher(on_address_change, last_ip, last_protocol)
         # A keyed pair from the last run is dialled before any scan; see seeded_session.
         self._ip, self._announced_version = seeded_session(last_ip, last_protocol)
+        # A configured address is used as is and never replaced by a scan. The
+        # seed's protocol only counts when it was seen at that same address.
+        self._fixed_host = host
+        self._fixed_host_failures = 0
+        if host:
+            if self._ip != host:
+                self._announced_version = None
+            self._ip = host
         # Only a session that worked publishes its version, so a keyed seed had a
         # keyed session: it gets no 3.3 fallback either (see session_candidates).
         self._version: float | None = self._announced_version
@@ -183,7 +195,11 @@ class TuyaLANClient:
 
     async def _connect_at_any_version(self, ip: str, *, scanned: bool) -> tinytuya.Device | None:
         """Connect to a known IP, trying the announced protocol then the default."""
-        for version in session_candidates(self._announced_version, self._version, scanned=scanned):
+        if self._fixed_host:
+            candidates = fixed_host_candidates(self._announced_version, self._version)
+        else:
+            candidates = session_candidates(self._announced_version, self._version, scanned=scanned)
+        for version in candidates:
             device = await self._hass.async_add_executor_job(
                 self._try_direct_connect, ip, version
             )
@@ -199,7 +215,43 @@ class TuyaLANClient:
                 return device
         return None
 
+    async def _connect_fixed_host(self) -> bool:
+        """Connect to the configured address, without ever scanning."""
+        device = await self._connect_at_any_version(self._fixed_host, scanned=False)
+        if device:
+            self._device = device
+            self.connected = True
+            if self._fixed_host_failures >= FIXED_HOST_WARN_AFTER:
+                _LOGGER.info(
+                    "LAN connection to %s at %s restored", self._device_id, self._fixed_host
+                )
+            else:
+                _LOGGER.debug("LAN connected to %s at %s", self._device_id, self._fixed_host)
+            self._fixed_host_failures = 0
+            return True
+
+        self._fixed_host_failures += 1
+        if fixed_host_failure_warns(self._fixed_host_failures):
+            _LOGGER.warning(
+                "Device %s not reachable at its LAN address %s after %d attempts; "
+                "using the cloud until it answers",
+                self._device_id,
+                self._fixed_host,
+                self._fixed_host_failures,
+            )
+        else:
+            _LOGGER.debug(
+                "LAN connection to %s at %s failed (attempt %d)",
+                self._device_id,
+                self._fixed_host,
+                self._fixed_host_failures,
+            )
+        return False
+
     async def _connect(self) -> bool:
+        if self._fixed_host:
+            return await self._connect_fixed_host()
+
         # Try the cached or seeded IP first (direct TCP, no broadcast needed)
         if self._ip:
             _LOGGER.debug("Trying direct LAN connection to %s at %s", self._device_id, self._ip)
