@@ -292,3 +292,74 @@ class AddressPublisher:
         self._last, self._protocol = ip, protocol
         if self._callback:
             self._callback(ip)
+
+
+# A fixed LAN address replaces discovery for networks where the Tuya broadcast
+# never reaches Home Assistant, such as a monitor on a separate VLAN. A failed
+# connect to it is logged at debug level until this many fail in a row, so a
+# monitor that is merely switched off for the night does not fill the log.
+FIXED_HOST_WARN_AFTER = 5
+
+
+def normalize_lan_host(value: object) -> str | None:
+    """The LAN address from the options, or None when discovery should be used.
+
+    Blank means "scan as before". Anything with whitespace, a comma, a slash
+    or a scheme is rejected with ValueError, since tinytuya wants one bare IP
+    address or host name and would otherwise fail on every connect.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("LAN address must be text")
+    host = value.strip()
+    if not host:
+        return None
+    if any(ch.isspace() for ch in host) or "/" in host or "," in host:
+        raise ValueError("LAN address must be one bare IP address or host name")
+    return host
+
+
+def fixed_host_failure_warns(consecutive_failures: int, threshold: int = FIXED_HOST_WARN_AFTER) -> bool:
+    """True for the one failure, in a row of them, that deserves a warning.
+
+    Earlier failures stay at debug level and later ones repeat nothing, so a
+    long outage costs one warning rather than one every reconnect cycle.
+    """
+    return consecutive_failures == threshold
+
+
+def fixed_host_for_entry(value: object, camera_count: int) -> str | None:
+    """The fixed LAN address to use, given how many monitors the entry holds.
+
+    The option holds one address, so it only applies to an account with a
+    single monitor; with more, each would be sent to the same address and all
+    but one would fail, so they keep finding themselves by broadcast instead.
+    An invalid stored value also falls back to discovery.
+    """
+    if camera_count != 1:
+        return None
+    try:
+        return normalize_lan_host(value)
+    except ValueError:
+        return None
+
+
+def fixed_host_candidates(announced: float | None, last_session: float | None) -> list[float]:
+    """Protocol versions to try at a configured address, best guess first.
+
+    No broadcast reaches Home Assistant there, so nothing announces the
+    version. The keyed versions go first, since only their handshake proves the
+    version; 3.3 comes last, as a bare TCP connect that proves nothing and
+    would keep a 3.5 monitor, and with it the bridge's LAN streams, on 3.3. A
+    keyed version that worked before, or one seeded from the bridge JSON, is
+    tried before the others.
+    """
+    candidates: list[float] = []
+    for version in (announced, last_session):
+        if keyed_protocol(version) and version not in candidates:
+            candidates.append(version)
+    for version in (3.5, 3.4, PROTOCOL_VERSION_DEFAULT):
+        if version not in candidates:
+            candidates.append(version)
+    return candidates

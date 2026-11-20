@@ -17,6 +17,7 @@ from .const import (
     CONF_COUNTRY_CODE,
     CONF_DEVICE_ID,
     CONF_ECODE,
+    CONF_LAN_HOSTS,
     CONF_LAN_STREAMING,
     CONF_PARTNER,
     CONF_SID,
@@ -33,6 +34,7 @@ from .const import (
 )
 from .coordinator import PhilipsAventCoordinator
 from .lan_credentials import fetch_missing_passwords, fetch_p2p_passwords, lan_credentials
+from .lan_policy import fixed_host_for_entry
 from .payload import (
     BRIDGE_CONFIG_PREFIX,
     bridge_config_filename,
@@ -244,6 +246,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     previous = previous_lan_values(await hass.async_add_executor_job(_read_previous))
 
+    configured_lan_host = entry.options.get(CONF_LAN_HOSTS)
+    lan_host = fixed_host_for_entry(configured_lan_host, len(cameras))
+    if configured_lan_host and not lan_host:
+        _LOGGER.warning(
+            "Ignoring the LAN address %r: it applies to an account with exactly one monitor "
+            "and must be a bare IP address or host name; finding monitors by broadcast instead",
+            configured_lan_host,
+        )
+
     coordinators: dict = {}
     passwords: dict[str, str] = {}
     write_lock = asyncio.Lock()
@@ -289,7 +300,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
             coordinators[cam_id] = coordinator
             seed = previous.get(cam_id, {})
-            await coordinator.start_lan(_on_address_change, seed.get("lan_ip") or None, seed.get("lan_protocol", ""))
+            await coordinator.start_lan(
+                _on_address_change, seed.get("lan_ip") or None, seed.get("lan_protocol", ""), lan_host
+            )
 
         # With LAN streaming off the bridge file carries no P2P password, so there is nothing to fetch.
         if entry.options.get(CONF_LAN_STREAMING, DEFAULT_LAN_STREAMING):

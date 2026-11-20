@@ -1,7 +1,9 @@
 """Tests for the LAN keep-alive and reconnect policy (issue #62)."""
 
+import pytest
 from lan_policy import (
     DATA_TIMEOUT,
+    FIXED_HOST_WARN_AFTER,
     HEARTBEAT_INTERVAL,
     KEYED_PROTOCOL_MIN_VERSION,
     LAN_ERR_CONNECT,
@@ -13,11 +15,15 @@ from lan_policy import (
     baseline_dps,
     data_stale,
     exclusive_alert_detectors,
+    fixed_host_candidates,
+    fixed_host_failure_warns,
+    fixed_host_for_entry,
     heartbeat_due,
     heartbeat_outcome,
     is_connection_error,
     keyed_protocol,
     lan_write_delivered,
+    normalize_lan_host,
     parse_protocol_version,
     reconnect_delay,
     seeded_session,
@@ -290,3 +296,55 @@ class TestSessionCandidates:
         # whatever now answers at that address.
         assert session_candidates(3.5, 3.5, scanned=False) == [3.5]
         assert session_candidates(3.4, None, scanned=False) == [3.4]
+
+
+class TestFixedLanHost:
+    """A configured LAN address replaces the broadcast scan, for monitors on another VLAN."""
+
+    def test_blank_means_discovery(self):
+        for value in (None, "", "   "):
+            assert normalize_lan_host(value) is None
+
+    def test_address_is_trimmed(self):
+        assert normalize_lan_host(" 10.0.2.11 ") == "10.0.2.11"
+        assert normalize_lan_host("babyfoon.lan") == "babyfoon.lan"
+
+    def test_ipv6_is_accepted(self):
+        assert normalize_lan_host("fd00::11") == "fd00::11"
+
+    def test_urls_and_junk_are_rejected(self):
+        for value in ("http://10.0.2.11", "10.0.2.11/24", "10.0.2 .11", "10.0.2.11,10.0.2.12", 11, ["10.0.2.11"]):
+            with pytest.raises(ValueError):
+                normalize_lan_host(value)
+
+    def test_applies_to_an_entry_with_one_monitor(self):
+        assert fixed_host_for_entry("10.0.2.11", 1) == "10.0.2.11"
+
+    def test_ignored_with_several_monitors(self):
+        # One address cannot serve two monitors; they keep scanning.
+        assert fixed_host_for_entry("10.0.2.11", 2) is None
+
+    def test_invalid_stored_value_falls_back_to_discovery(self):
+        assert fixed_host_for_entry("http://10.0.2.11", 1) is None
+        assert fixed_host_for_entry(None, 1) is None
+
+    def test_early_failures_stay_quiet(self):
+        for failures in range(1, FIXED_HOST_WARN_AFTER):
+            assert not fixed_host_failure_warns(failures)
+
+    def test_one_warning_per_outage(self):
+        assert fixed_host_failure_warns(FIXED_HOST_WARN_AFTER)
+        for failures in range(FIXED_HOST_WARN_AFTER + 1, FIXED_HOST_WARN_AFTER + 50):
+            assert not fixed_host_failure_warns(failures)
+
+    def test_keyed_versions_come_before_the_3_3_fallback(self):
+        assert fixed_host_candidates(None, None) == [3.5, 3.4, PROTOCOL_VERSION_DEFAULT]
+
+    def test_a_keyed_version_that_worked_goes_first(self):
+        assert fixed_host_candidates(None, 3.4) == [3.4, 3.5, PROTOCOL_VERSION_DEFAULT]
+        assert fixed_host_candidates(3.4, 3.5) == [3.4, 3.5, PROTOCOL_VERSION_DEFAULT]
+
+    def test_a_3_3_session_does_not_go_first(self):
+        # Its connect proves nothing, so a 3.5 monitor would stay on it.
+        assert fixed_host_candidates(None, 3.3) == [3.5, 3.4, PROTOCOL_VERSION_DEFAULT]
+

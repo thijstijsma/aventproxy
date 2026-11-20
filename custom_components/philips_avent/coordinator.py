@@ -105,6 +105,7 @@ class PhilipsAventCoordinator(DataUpdateCoordinator):
         on_address_change: Callable[[str], None] | None = None,
         last_ip: str | None = None,
         last_protocol: str = "",
+        fixed_host: str | None = None,
     ) -> None:
         # Entries store no key, so it usually comes from the first refresh.
         if not self._local_key:
@@ -121,6 +122,7 @@ class PhilipsAventCoordinator(DataUpdateCoordinator):
             last_ip,
             last_protocol,
             on_session_up=self._mark_lan_live,
+            host=fixed_host,
         )
         await self._lan_client.start()
 

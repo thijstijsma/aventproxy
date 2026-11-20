@@ -159,6 +159,9 @@ DEFAULT_BRIDGE_HOST = "localhost"
 CONF_TALKBACK = "talkback"
 DEFAULT_TALKBACK = False
 CONF_LAN_STREAMING = "lan_streaming"
+# Fixed LAN address of the monitor. Unset means find it by Tuya broadcast, which
+# only works when Home Assistant and the monitor share a broadcast domain.
+CONF_LAN_HOSTS = "lan_hosts"
 DEFAULT_LAN_STREAMING = True
 
 
